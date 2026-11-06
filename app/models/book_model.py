@@ -15,4 +15,3 @@ class BookModel(BaseModel):
     title: Annotated[str, Field()]
     author: Annotated[str, Field()]
     genre: Annotated[str, Field()]
-    description: Annotated(str, Field())
