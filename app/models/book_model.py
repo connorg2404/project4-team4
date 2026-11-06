@@ -12,9 +12,7 @@ from pydantic import BaseModel, Field, SecretStr
 class BookModel(BaseModel):
     # This field must be greate than 0
     id: Annotated[int, Field(gt=0)]
-    # This field must be between 8 and 30 characters long
-    title: Annotated[str, Field(min_length=2, max_length=200)]
-    author: Annotated[str, Field(min_length=1, max_length=30)]
-    # This field will be hidden when this object is returned,
-    # and can be optional ( = none)
-    description: Annotated[str, Field(min_length=0, max_length=500)]
+    title: Annotated[str, Field()]
+    author: Annotated[str, Field()]
+    genre: Annotated[str, Field()]
+    description: Annotated[str, Field()]

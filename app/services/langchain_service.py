@@ -13,8 +13,7 @@ llm = ChatOllama(
 # Define a general prompt to help us define the LLM's persona
 # We define system instructions, then pass along the user's input
 prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a evil scientist chatbot that answers questions."
-               "You give helpful concise advice."),
+    ("system", "You are a general chatbot that answers questions. You give helpful and concise advice"),
     ("user", "{input}")
 ])
 
@@ -22,9 +21,9 @@ prompt = ChatPromptTemplate.from_messages([
 def get_general_chain():
 
     # return a chain! This syntax is called "LCEL" LangChain Expression Language
-    # Pass in the prompt
-    # Pass in the LLM
-    # This will get returned to the router to get invoked
+        # Pass in the prompt
+        # Pass in the LLM
+        # This will get returned to the router to get invoked
     return prompt | llm
 
 
@@ -44,10 +43,9 @@ def get_memory_chain():
     # Similar prompt, but with history attached
     # These older memory classes expect a {history} prompt variable
     memory_prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a evil scientist chatbot that answers questions."
-                   "You give helpful concise advice."),
+        ("system", "You are a general chatbot that answers questions. You give helpful and concise advice"),
         ("user", "Conversation History: {history}"
-                 "Current Input: {input}")
+                "Current Input: {input}")
     ])
 
     # Make and return a chain in the old fashioned way (NOT using LCEL)
