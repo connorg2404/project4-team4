@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 
-from routers import books
+from app.routers import books
+
+# IMPORTANT: From the main project folder, run the app using the following:
+# python -m uvicorn app.app:app --reload
 
 # Set up FastAPI. We'll use this "app" variable to do FastAPI stuff below
 app = FastAPI()

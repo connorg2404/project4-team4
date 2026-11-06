@@ -5,8 +5,8 @@ from fastapi import APIRouter
 from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import BaseModel
 
-from models.book_model import BookModel
-from services.langchain_service import get_general_chain, get_memory_chain
+from app.models.book_model import BookModel
+from app.services.langchain_service import get_general_chain, get_memory_chain
 
 # Every router gets set up like this:
 router = APIRouter(
