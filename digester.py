@@ -46,12 +46,15 @@ class CategoryRule:
 
 DEFAULT_CATEGORIES = {
     "science fiction": CategoryRule(("science fiction",)),
-    "fantasy": CategoryRule(("fantasy",)),
-    "historical fiction": CategoryRule(("historical fiction",)),
+    "fantasy": CategoryRule(("fantasy", "fantasy fiction")),
+    "historical fiction": CategoryRule(("historical fiction", "fiction, historical")),
     "romance": CategoryRule(
-        ("romance",), ("romance languages", "romance philology", "romance literature")
+        ("romance", "romance fiction"),
+        ("romance languages", "romance philology", "romance literature"),
     ),
 }
+# excluding these cause vinland saga and mha took over everything cause they had a lot of editions
+DEFAULT_EXCLUDE_SUBJECTS = ("comics", "comic book", "graphic novel", "manga")
 
 
 @dataclass
@@ -61,7 +64,8 @@ class Config:
     )
     per_category: int = 200
     min_description_chars: int = 200
-    min_ratings: int = 5
+    min_ratings: int = 15
+    exclude_subjects: tuple[str, ...] = DEFAULT_EXCLUDE_SUBJECTS
     bayesian_prior_weight: float = 10
     title_exclude_regex: str = (
         r"\b(box(ed)? set|omnibus|complete collection|collected works)\b"
@@ -109,16 +113,53 @@ def pick_cover_id(covers: Any) -> int | None:
     return None
 
 
-def match_categories(subjects: list[str], categories: dict[str, CategoryRule]) -> tuple[str, ...]:
-    def matches(subject: str, rule: CategoryRule) -> bool:
-        s = subject.lower()
-        return (any(k.lower() in s for k in rule.include)
-                and not any(k.lower() in s for k in rule.exclude))
+def _parts(text: str) -> list[str]:
+    return [p.strip() for p in re.split(r"[,/;:]", text.lower()) if p.strip()]
 
+
+def subject_matches(subject: str, rule: CategoryRule) -> bool:
+    # True if some include phrase matches whole parts of the subject.
+    # The phrase's last part may have a plain qualifier in front ("American science
+    # fiction", "paranormal romance"), but blends like "Love & Romance" or
+    # "Science Fiction & Fantasy" do not match.
+    low = subject.lower()
+    if any(x.lower() in low for x in rule.exclude):
+        return False
+    parts = _parts(subject)
+    for phrase in rule.include:
+        want = _parts(phrase)
+        n = len(want)
+        for i in range(len(parts) - n + 1):
+            window = parts[i:i + n]
+            last, qualifier = window[-1], window[-1][: -len(want[-1])]
+            if window[:-1] == want[:-1] and (
+                last == want[-1]
+                or (last.endswith(" " + want[-1]) and "&" not in qualifier
+                    and " and " not in qualifier)
+            ):
+                return True
+    return False
+
+
+def match_categories(subjects: list[str], categories: dict[str, CategoryRule]) -> tuple[str, ...]:
     return tuple(
         name for name, rule in categories.items()
-        if any(matches(s, rule) for s in subjects)
+        if any(subject_matches(s, rule) for s in subjects)
     )
+
+
+def has_excluded_subject(subjects: list[str], exclude: tuple[str, ...]) -> bool:
+    return any(x.lower() in s.lower() for s in subjects for x in exclude)
+
+
+def title_stem(title: str) -> str:
+    # Title without volume/book numbers, so "Saga, Volume 2" and "Saga #3" both give "saga".
+    t = title.lower()
+    t = re.sub(r"\(.*?\)", "", t)
+    t = re.sub(r"[,:]?\s*\b(vol(ume)?s?|books?|parts?|no|number|issue)\b\.?\s*[\divxl]+\b.*$", "", t)
+    t = re.sub(r"\s*#\s*\d+.*$", "", t)
+    t = re.sub(r"[\s,:-]+\d+$", "", t)
+    return t.strip()
 
 # using this for "popularity"
 def bayesian_score(v: int, r: float, c: float, m: float) -> float:
@@ -147,15 +188,20 @@ class Candidate:
     subjects: list[str] = field(default_factory=list)
     first_publish_year: int | None = None
     cover_id: int | None = None
+    series_key: str = ""  # first author + title stem; "" means never treated as a series
 
 
 def assign_greedy(candidates: list[Candidate], category_order, quota: int) -> dict[str, list[Candidate]]:
     selected: dict[str, list[Candidate]] = {name: [] for name in category_order}
     ranked = sorted(candidates, key=lambda c: (-c.score, -c.ratings_count, c.work_id))
+    used_series: set[str] = set()  # only the best-ranked book of a series is kept
     for cand in ranked:
+        if cand.series_key and cand.series_key in used_series:
+            continue
         for name in selected:
             if name in cand.categories and len(selected[name]) < quota:
                 selected[name].append(cand)
+                used_series.add(cand.series_key)
                 break
         if all(len(v) >= quota for v in selected.values()):
             break
@@ -289,6 +335,9 @@ def works_pass(cfg: Config, eligible: dict, stats: dict) -> list[Candidate]:
             dropped["short_description"] += 1  # missing or too short
             continue
         subjects = [s for s in work.get("subjects") or [] if isinstance(s, str)]
+        if has_excluded_subject(subjects, cfg.exclude_subjects):
+            dropped["comics_or_manga"] += 1
+            continue
         categories = match_categories(subjects, cfg.categories)
         if not categories:
             dropped["no_subject_match"] += 1
@@ -305,6 +354,7 @@ def works_pass(cfg: Config, eligible: dict, stats: dict) -> list[Candidate]:
             subjects=subjects,
             first_publish_year=parse_year(work.get("first_publish_date")),
             cover_id=pick_cover_id(work.get("covers")),
+            series_key=f"{author_keys[0]}|{stem}" if (stem := title_stem(title)) else "",
         ))
 
     print(f"works: {len(candidates):,} candidates")
@@ -383,7 +433,7 @@ def run(cfg: Config) -> int:
         "global_mean_rating": None,
         "malformed_lines": {"ratings": 0, "works": 0, "authors": 0},
         "dropped": {"too_few_ratings": 0, "title_excluded": 0, "no_author": 0,
-                    "short_description": 0, "no_subject_match": 0},
+                    "short_description": 0, "no_subject_match": 0, "comics_or_manga": 0},
     }
 
     eligible = ratings_pass(cfg, stats)
@@ -414,6 +464,7 @@ def run(cfg: Config) -> int:
             "per_category": cfg.per_category,
             "min_description_chars": cfg.min_description_chars,
             "min_ratings": cfg.min_ratings,
+            "exclude_subjects": list(cfg.exclude_subjects),
             "bayesian_prior_weight": cfg.bayesian_prior_weight,
             "title_exclude_regex": cfg.title_exclude_regex,
         },
@@ -471,6 +522,7 @@ def print_readme_summary(cfg: Config, m: dict) -> None:
         "Each work is assigned to the first matching category with room, so there are no duplicates.",
         "",
         "Filters: at least " f"{cfg.min_ratings} ratings; a title that isn't a box set/omnibus; "
+        "no comics/manga subjects; only the best-rated book per author and title stem (one entry per series); "
         f"at least one author; a description of at least {cfg.min_description_chars} characters "
         f"(before any `{DIVIDER}` divider); at least one subject matching a category.",
         "",
@@ -482,6 +534,7 @@ def print_readme_summary(cfg: Config, m: dict) -> None:
         f"| Dropped: no author | {d['no_author']:,} |",
         f"| Dropped: description missing/short | {d['short_description']:,} |",
         f"| Dropped: no subject match | {d['no_subject_match']:,} |",
+        f"| Dropped: comics/manga subject | {d['comics_or_manga']:,} |",
     ]
     lines += [f"| Selected: {n} | {k} |" for n, k in m["selected_per_category"].items()]
     lines += [f"| **Selected total** | **{sum(m['selected_per_category'].values())}** |",
