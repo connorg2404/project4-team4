@@ -80,7 +80,7 @@ class Config:
 
 
 RECORD_FIELDS = (
-    "work_id", "title", "authors", "author_bio", "description",
+    "work_id", "title", "authors", "author_bio", "author_bio_author", "description",
     "subjects", "first_publish_year", "source_url", "popularity", "cover_id",
 )
 
@@ -229,6 +229,8 @@ def validate_record(rec: dict) -> list[str]:
         "title": isinstance(rec.get("title"), str),
         "authors": str_list(rec.get("authors")),
         "author_bio": rec.get("author_bio") is None or isinstance(rec.get("author_bio"), str),
+        "author_bio_author": rec.get("author_bio_author") is None
+        or isinstance(rec.get("author_bio_author"), str),
         "description": isinstance(rec.get("description"), str),
         "subjects": str_list(rec.get("subjects")),
         "first_publish_year": rec.get("first_publish_year") is None or is_int(rec.get("first_publish_year")),
@@ -388,18 +390,19 @@ def authors_pass(cfg: Config, needed: set[str], stats: dict) -> dict[str, tuple[
 
 
 def build_record(cand: Candidate, authors: dict) -> dict:
-    names, bio = [], None
+    names, bio, bio_author = [], None, None
     for key in cand.author_keys:
         name, author_bio = authors.get(key, (None, None))
         if name:
             names.append(name)
-        if bio is None:
-            bio = author_bio
+            if bio is None and author_bio:  # the bio must belong to a named author
+                bio, bio_author = author_bio, name
     return {
         "work_id": cand.work_id,
         "title": cand.title,
         "authors": names,
         "author_bio": bio,
+        "author_bio_author": bio_author,  # name of the author the bio belongs to
         "description": cand.description,
         "subjects": cand.subjects,
         "first_publish_year": cand.first_publish_year,
