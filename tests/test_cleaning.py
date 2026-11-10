@@ -114,5 +114,61 @@ class CleaningTests(unittest.TestCase):
         self.assertEqual(report["dropped_percent"], 0)
 
 
+class ReviewFeedbackTests(unittest.TestCase):
+    def test_standalone_separator_styles_are_removed(self):
+        for rule in ("---", "----------", "***", "___", "- - -", "* * *", "_ _ _"):
+            with self.subTest(rule=rule):
+                self.assertEqual(
+                    clean_text(f"First paragraph.\n  {rule}  \nSecond paragraph."),
+                    "First paragraph.\n\nSecond paragraph.",
+                )
+
+    def test_windows_line_endings_around_separators(self):
+        self.assertEqual(
+            clean_text("First.\r\n\r\n----------\r\n\r\nSecond."),
+            "First.\n\nSecond.",
+        )
+
+    def test_normal_hyphens_and_attribution_are_preserved(self):
+        text = "Jean-Paul wrote science-fiction in 1990-2000.\n---From Wikipedia"
+        self.assertEqual(clean_text(text), text)
+
+    def test_separator_cleanup_applies_to_bio_and_description(self):
+        record = example_record()
+        record["description"] = "A space adventure.\n---\nExplores discovery."
+        record["author_bio"] = "An author.\n----------\nWrites about space."
+        record["author_bio_author"] = "Example Author"
+        result = clean_record(record)
+        self.assertEqual(result["description"], "A space adventure.\n\nExplores discovery.")
+        self.assertEqual(result["author_bio"], "An author.\n\nWrites about space.")
+        self.assertEqual(result["author_bio_author"], "Example Author")
+
+    def test_separator_only_bio_becomes_missing(self):
+        record = example_record()
+        record["author_bio"] = "----------"
+        self.assertIsNone(clean_record(record)["author_bio"])
+
+    def test_separator_only_description_is_rejected(self):
+        record = example_record()
+        record["description"] = "---\n***\n___"
+        with self.assertRaisesRegex(InvalidRecord, "Description"):
+            clean_record(record)
+
+    def test_bestseller_labels_survive_but_tracking_tags_do_not(self):
+        self.assertEqual(
+            normalize_subjects([
+                "New York Times Bestseller",
+                "New york times bestseller",
+                "nyt:combined-print-and-e-book-fiction=2020-01-01",
+                "Fantasy",
+            ]),
+            ["new york times bestseller", "fantasy"],
+        )
+
+    def test_separator_cleanup_is_stable(self):
+        once = clean_text("**An author.**\n----------\nMore details.")
+        self.assertEqual(clean_text(once), once)
+
+
 if __name__ == "__main__":
     unittest.main()

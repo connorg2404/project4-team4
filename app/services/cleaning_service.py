@@ -65,6 +65,15 @@ def clean_text(value: str | None) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 
+    # Remove standalone decorative rules before Markdown cleanup.
+    # Keep a paragraph boundary and preserve hyphens inside actual text.
+    text = re.sub(
+        r"(?m)^[^\S\n]*(?:-(?:[^\S\n]*-){2,}|"
+        r"\*(?:[^\S\n]*\*){2,}|_(?:[^\S\n]*_){2,})[^\S\n]*$",
+        "\n",
+        text,
+    )
+
     # Images and links retain their readable labels.
     text = re.sub(r"!?\[([^\]]+)\]\([^\n)]*\)", r"\1", text)
     text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
