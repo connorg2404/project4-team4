@@ -3,13 +3,21 @@ from langchain_classic.chains.conversation.base import ConversationChain
 from langchain_classic.memory import ConversationBufferWindowMemory, ConversationSummaryMemory
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
+from langchain_aws import ChatBedrockConverse
 
-# Define the LLM we're going to use
-llm = ChatOllama(
-    model="llama3.2:3b",
-    temperature=.9 # from 0-1. higher temp = more creativity
+
+llm = ChatBedrockConverse(
+    model="amazon.nova-lite-v1:0",     # the Bedrock model ID you have
+    region_name="us-east-2",        # the region where you have access to that model
+    temperature=0.9,
 )
 
+
+rag_llm = ChatBedrockConverse(
+    model="amazon.nova-lite-v1:0",     # the Bedrock model ID you have
+    region_name="us-east-2",        # the region where you have access to that model
+    temperature=0.3,
+)
 # Define a general prompt to help us define the LLM's persona
 # We define system instructions, then pass along the user's input
 prompt = ChatPromptTemplate.from_messages([
@@ -25,6 +33,26 @@ def get_general_chain():
         # Pass in the LLM
         # This will get returned to the router to get invoked
     return prompt | llm
+
+rag_prompt = ChatPromptTemplate.from_messages([
+    ("system", """You are a helpful assistant that answers questions about books or book recommendations based on the following context.
+If you don't find the answer in the context, just say that you don't know.
+Context: {context}
+
+Question: {input}
+
+Answer:
+
+Example answer format:
+1. **Of Mice and Men** by John Steinbeck: Like Gatsby, it explores the American Dream. George and Lennie "dream of owning their own farm during the Great Depression."
+"""),
+    ("user", "{input}")
+])
+
+def get_rag_chain():
+    return {"context": ensemble_retriever,  "input": RunnablePassthrough()} |rag_prompt | rag_llm  | StrOutputParser()
+
+
 
 
 # Create a different chain that has conversational memory
