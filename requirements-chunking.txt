@@ -1,0 +1,3 @@
+# Python 3.12 recommended. No LLM weights or embedding runtime needed here.
+transformers==4.57.1
+pysbd==0.3.4
