@@ -25,6 +25,8 @@ REQUEST_TIMEOUT_S = 60
 REFUSAL_FALLBACK = "I don't know. I couldn't find anything relevant in the catalog."
 MAX_BOOKS = 100 
 MAX_BOOK_CHARS = 200
+MAX_HISTORY_MESSAGES = 6   # Last 3 question/answer pairs
+MAX_HISTORY_CHARS = 1500   # Per message, keeps requests small
 RECOMMEND_PROMPT = "Based on the books on my list, what should I read next?"
  
 st.set_page_config(page_title="Librarian Bot", page_icon="📚")
@@ -53,6 +55,15 @@ def build_payload(question: str, top_k: int, user_books: list[str]) -> dict:
     payload = {"question": question, "top_k": top_k}
     if user_books:  # leave the field out entirely when there is nothing to send
         payload["user_books"] = user_books
+    # Earlier turns, so follow-ups like "anything shorter?" make sense. The current
+    # question was already appended to messages, so [:-1] leaves it out; errors are skipped.
+    history = [
+        {"role": m["role"], "content": m["content"][:MAX_HISTORY_CHARS]}
+        for m in st.session_state.get("messages", [])[:-1]
+        if m.get("content") and not m.get("error")
+    ][-MAX_HISTORY_MESSAGES:]
+    if history:
+        payload["history"] = history
     return payload
  
 def check_health(api_url: str) -> dict:

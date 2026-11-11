@@ -14,4 +14,5 @@ class BookModel(BaseModel):
     id: Annotated[int, Field(gt=0)]
     title: Annotated[str, Field()]
     author: Annotated[str, Field()]
-    genre: Annotated[str, Field()]
+    # genre: Annotated[str, Field()]
+    description: Annotated[str, Field()]
