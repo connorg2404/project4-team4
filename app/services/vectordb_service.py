@@ -38,7 +38,10 @@ def _model():
 
     # Nomic's architecture is custom code on the Hub, so trust_remote_code is required.
     # The pinned revision keeps the weights and config fixed.
-    return SentenceTransformer(EMBEDDING_MODEL, revision=EMBEDDING_REVISION, trust_remote_code=True)
+    # device="cpu": PyTorch's Apple GPU (MPS) backend crashes the process on some Macs.
+    return SentenceTransformer(
+        EMBEDDING_MODEL, revision=EMBEDDING_REVISION, trust_remote_code=True, device="cpu",
+    )
 
 
 def _embed(texts: list[str]) -> list[list[float]]:

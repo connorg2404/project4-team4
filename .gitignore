@@ -1,3 +1,6 @@
 __pycache__
 .venv
 evaluation/results/*.csv
+# Open Library dumps (multi-GB) + download sidecars
+data/dumps/
+.pytest_cache/
