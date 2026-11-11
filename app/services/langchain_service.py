@@ -6,8 +6,6 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from langchain_aws import ChatBedrockConverse
-from langchain_classic.chains.conversation.base import ConversationChain
-from langchain_classic.memory import ConversationBufferWindowMemory, ConversationSummaryMemory
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -26,7 +24,7 @@ llm = ChatBedrockConverse(
 rag_llm = ChatBedrockConverse(
     model=LLM_MODEL_ID,
     region_name=LLM_REGION,
-    temperature=0.3,
+    temperature=0.25,
 )
 
 # Define a general prompt to help us define the LLM's persona
@@ -40,39 +38,10 @@ prompt = ChatPromptTemplate.from_messages([
 def get_general_chain():
 
     # return a chain! This syntax is called "LCEL" LangChain Expression Language
-        # Pass in the prompt
-        # Pass in the LLM
-        # This will get returned to the router to get invoked
+    # Pass in the prompt
+    # Pass in the LLM
+    # This will get returned to the router to get invoked
     return prompt | llm
-
-
-# Create a different chain that has conversational memory
-# This is gonna be very taxing on our local LLMs
-def get_memory_chain():
-
-    # Create a memory object
-
-    # Window memory - remembers the last "k" interactions
-    ### memory = ConversationBufferWindowMemory(k=3)
-
-    # Summary memory - keeps a running paragraph of what we've talked about
-    memory = ConversationSummaryMemory(llm=llm)
-    # Our LLM is doing the summarization THEN generating a response... expensive
-
-    # Similar prompt, but with history attached
-    # These older memory classes expect a {history} prompt variable
-    memory_prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a general chatbot that answers questions. You give helpful and concise advice"),
-        ("user", "Conversation History: {history}"
-                "Current Input: {input}")
-    ])
-
-    # Make and return a chain in the old fashioned way (NOT using LCEL)
-    return ConversationChain(
-        llm = llm,
-        memory = memory,
-        prompt = memory_prompt
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +56,9 @@ REFUSAL_DISTANCE = float(os.getenv("REFUSAL_DISTANCE", "0.55"))
 # chunks to still end up with top_k distinct books after grouping and filtering.
 CHUNKS_PER_BOOK = 4
 
+# Only the most recent messages go into the prompts (a long history makes a small model drift)
+MAX_HISTORY_MESSAGES = 8
+
 REFUSAL_MESSAGE = (
     "I couldn't find anything in the catalog that matches that question. "
     "Try asking about a book, author, genre, or theme."
@@ -97,23 +69,47 @@ rag_prompt = ChatPromptTemplate.from_messages([
 
 Rules:
 - Only mention books from the CATALOG, using their exact titles and authors. Never mention any other book, even famous ones.
-- For each book you suggest, give a short reason it fits, using the relevant part of its catalog entry.
+- Base every fact on the CATALOG entries. Do not use your own knowledge of books, even when you know the answer. If an entry only partly covers what was asked (e.g. it names one character), give just that and say the catalog doesn't include more.
 - The user already owns these books, so never suggest them: {owned_books}
 - Only state a publication year if it appears in the book's catalog entry.
 - If no book in the CATALOG fits the question, say you don't know. Do not guess.
 
-Answer format (a numbered list):
-1. **<Title>** by <Author>: <why it fits>
+First decide silently which kind of question this is, then answer in that format. Never write the kind's name or letter in your answer.
+
+A) RECOMMENDATION: the user wants books to read (e.g. "something like Dune", "what should I read next?", "books about grief").
+   Answer with a numbered list, giving a short reason each book fits from its catalog entry:
+   1. **<Title>** by <Author>: <why it fits>
+   Don't recommend the book the user is comparing against (or another edition or collection of it).
+
+B) QUESTION ABOUT A BOOK OR AUTHOR: the user wants information (e.g. "What genre is that book?", "Give me a summary of Dune", "Who are the main characters in Harry Potter?", "Who wrote it?").
+   Answer conversationally in one or two short paragraphs of plain prose. Use no numbered lists and no bullet points.
+   Talk only about the book or author asked about, and ignore the other CATALOG entries.
 
 CATALOG:
-{context}"""),
+{context}
+
+CONVERSATION SO FAR (for context only; still only suggest books from the CATALOG):
+{history}"""),
     ("user", "{question}")
+])
+
+# Turns a follow-up like "anything shorter than that?" into a standalone search query,
+# so the vector search (and the refusal check) knows what "that" means.
+condense_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Rewrite the user's latest message as a standalone search query for a book catalog. "
+               "Use the conversation to fill in what words like 'that', 'it' or 'more like those' refer to, "
+               "including book titles and authors. If the message is already standalone, return it unchanged. "
+               "Reply with only the query."),
+    ("user", "Conversation:\n{history}\n\nLatest message: {question}")
 ])
 
 
 def get_rag_chain():
     # Retrieval happens before the chain (in prepare_answer), so the chain is just prompt -> LLM -> text
     return rag_prompt | rag_llm | StrOutputParser()
+
+
+condense_chain = condense_prompt | rag_llm | StrOutputParser()
 
 
 rag_chain = get_rag_chain()
@@ -143,7 +139,7 @@ def _is_owned(book: dict[str, Any], owned: list[tuple[str, str]]) -> bool:
         if SequenceMatcher(None, owned_title, prefix).ratio() < 0.85:
             continue
         if not owned_last_name or any(
-            SequenceMatcher(None, owned_last_name, word).ratio() >= 0.8 for word in author_words
+                SequenceMatcher(None, owned_last_name, word).ratio() >= 0.8 for word in author_words
         ):
             return True
     return False
@@ -155,6 +151,8 @@ def retrieve_books(question: str, top_k: int, user_books: list[str] | None = Non
     books: dict[str, dict[str, Any]] = {}
     for hit in search_collection(question, k=top_k * CHUNKS_PER_BOOK):
         meta = hit["metadata"]
+        if meta.get("section") == "author_bio":  # Bios describe the author, not the book; keep them out
+            continue
         book = books.get(meta["work_id"])
         if book is None:  # Results arrive closest first, so the first chunk is the book's best
             book = books[meta["work_id"]] = {
@@ -190,9 +188,30 @@ def _source(book: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def prepare_answer(question: str, top_k: int, user_books: list[str] | None = None) -> dict[str, Any]:
+def _history_text(history: list[dict[str, str]] | None) -> str:
+    """[{"role": "user", "content": ...}, ...] -> 'User: ...\\nAssistant: ...'"""
+    recent = (history or [])[-MAX_HISTORY_MESSAGES:]
+    return "\n".join(f"{message['role'].capitalize()}: {message['content']}" for message in recent)
+
+
+def _mentioned(sources: list[dict[str, Any]], answer: str) -> list[dict[str, Any]]:
+    """Keep only the sources whose title appears in the answer. A title also counts without
+    its "(Series #3)" / "[collection]" suffix, since the model often drops that part."""
+    text = _norm(answer)
+    return [s for s in sources
+            if any(f" {t} " in f" {text} " for t in
+                   {_norm(s["title"]), _norm(re.sub(r"\s*[(\[].*?[)\]]", "", s["title"]))} if t)]
+
+
+def prepare_answer(question: str, top_k: int, user_books: list[str] | None = None,
+                   history: list[dict[str, str]] | None = None) -> dict[str, Any]:
     """Retrieve and decide whether to refuse. Shared by the normal and streaming endpoints."""
-    books = retrieve_books(question, top_k, user_books)
+    history_text = _history_text(history)
+    # Only spend the extra LLM call on follow-ups; a first question is searched as-is
+    search_query = question
+    if history_text:
+        search_query = condense_chain.invoke({"history": history_text, "question": question}).strip() or question
+    books = retrieve_books(search_query, top_k, user_books)
     if not books or books[0]["distance"] > REFUSAL_DISTANCE:
         # Refusals return no sources: nothing in the catalog was close enough to cite
         return {"refused": True, "sources": [], "inputs": None}
@@ -203,34 +222,39 @@ def prepare_answer(question: str, top_k: int, user_books: list[str] | None = Non
             "context": _context(books),
             "question": question,
             "owned_books": "; ".join(user_books) if user_books else "none",
+            "history": history_text or "none",
         },
     }
 
 
-def answer_question(question: str, top_k: int = 5, user_books: list[str] | None = None) -> dict[str, Any]:
+def answer_question(question: str, top_k: int = 5, user_books: list[str] | None = None,
+                    history: list[dict[str, str]] | None = None) -> dict[str, Any]:
     started = time.perf_counter()
-    prepared = prepare_answer(question, top_k, user_books)
+    prepared = prepare_answer(question, top_k, user_books, history)
     answer = REFUSAL_MESSAGE if prepared["refused"] else rag_chain.invoke(prepared["inputs"])
     return {
         "answer": answer,
-        "sources": prepared["sources"],
+        "sources": _mentioned(prepared["sources"], answer),
         "refused": prepared["refused"],
         "latency_ms": int((time.perf_counter() - started) * 1000),
     }
 
 
-def stream_answer(question: str, top_k: int = 5, user_books: list[str] | None = None) -> Iterator[str | dict]:
+def stream_answer(question: str, top_k: int = 5, user_books: list[str] | None = None,
+                  history: list[dict[str, str]] | None = None) -> Iterator[str | dict]:
     """Yield answer text pieces, then one final dict with sources, refused and latency_ms."""
     started = time.perf_counter()
-    prepared = prepare_answer(question, top_k, user_books)
+    prepared = prepare_answer(question, top_k, user_books, history)
+    answer = ""
     if prepared["refused"]:
         yield REFUSAL_MESSAGE
     else:
         for piece in rag_chain.stream(prepared["inputs"]):
             if piece:
+                answer += piece
                 yield piece
     yield {
-        "sources": prepared["sources"],
+        "sources": _mentioned(prepared["sources"], answer),
         "refused": prepared["refused"],
         "latency_ms": int((time.perf_counter() - started) * 1000),
     }

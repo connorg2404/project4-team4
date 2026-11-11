@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterator
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -13,10 +14,19 @@ from app.services.vectordb_service import collection_count
 router = APIRouter(tags=["librarian"])
 
 
+class HistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=5000)
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
     top_k: int = Field(5, ge=1, le=20)
     user_books: list[str] = Field(default_factory=list, max_length=50)  # Books the user already owns
+    history: list[HistoryMessage] = Field(default_factory=list, max_length=20)  # Earlier turns, oldest first
+
+    def history_dicts(self) -> list[dict[str, str]]:
+        return [message.model_dump() for message in self.history]
 
 
 # NOTE: these are plain `def`, not `async def`. Embedding and Bedrock calls block,
@@ -35,7 +45,7 @@ def health():
 
 @router.post("/ask")
 def ask(request: AskRequest):
-    return answer_question(request.question, request.top_k, request.user_books)
+    return answer_question(request.question, request.top_k, request.user_books, request.history_dicts())
 
 
 def _sse(data: dict, event: str | None = None) -> str:
@@ -46,7 +56,7 @@ def _sse(data: dict, event: str | None = None) -> str:
 
 def _events(request: AskRequest) -> Iterator[str]:
     try:
-        for item in stream_answer(request.question, request.top_k, request.user_books):
+        for item in stream_answer(request.question, request.top_k, request.user_books, request.history_dicts()):
             if isinstance(item, dict):  # The final summary: sources, refused, latency_ms
                 yield _sse(item, event="sources")
             else:
