@@ -3,9 +3,13 @@ uvicorn[standard]
 pydantic>=2
 chromadb
 sentence-transformers
+einops
 numpy
 langchain-core
 langchain-aws
 boto3
 streamlit>=1.40
 requests
+langchain_ollama
+langchain_classic
+langchain

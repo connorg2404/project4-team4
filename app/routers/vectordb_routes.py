@@ -1,53 +1,66 @@
+import json
+from collections.abc import Iterator
 
-from langchain.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
+from app.services.langchain_service import LLM_MODEL_ID, answer_question, stream_answer
+from app.services.vectordb_service import collection_count
 
-# # Similarity search endpoint for MONSTER FIGHTING TOOLS
-# # (NOT RAG yet)
-# @router.get("/search_monster_tools")
-# async def search_tools(query:str, k:int=5):
-#
-#
-#     # Call the Service method to search the collection
-#     results = search_collection(
-#         collection_name="monster_fighting_tools",
-#         query=query,
-#         # We COULD set the k value here, or just let default to 5
-#         k=k
-#     )
-#
-#     return results
+# These paths sit at the root (/health, /ask, /ask/stream) because that's
+# what the Streamlit frontend and evaluation/run_eval.py call.
+router = APIRouter(tags=["librarian"])
 
 
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+    top_k: int = Field(5, ge=1, le=20)
+    user_books: list[str] = Field(default_factory=list, max_length=50)  # Books the user already owns
 
-# RAG endpoint for MONSTER FIGHTING TOOLS
-@router.get("/rag_books_suggestions")
-async def tools_rag(query:str):
 
-    # First, get the search results from the collection
-    results = search_collection(
-        collection_name="books",
-        query=query
-        # We COULD set the k value here, or just let default to 5
+# NOTE: these are plain `def`, not `async def`. Embedding and Bedrock calls block,
+# and FastAPI runs plain `def` endpoints in a thread pool so other requests aren't frozen.
+
+@router.get("/health")
+def health():
+    try:
+        chunks = collection_count()
+    except ValueError as error:  # e.g. the index was built with a different embedding model
+        raise HTTPException(status_code=503, detail=str(error))
+    if chunks == 0:
+        raise HTTPException(status_code=503, detail="Vector DB is empty. Run scripts.index_chunks first.")
+    return {"status": "ok", "model": LLM_MODEL_ID, "index_size": chunks}  # Field names the frontend reads
+
+
+@router.post("/ask")
+def ask(request: AskRequest):
+    return answer_question(request.question, request.top_k, request.user_books)
+
+
+def _sse(data: dict, event: str | None = None) -> str:
+    """One server-sent event. JSON keeps newlines inside a token from breaking the format."""
+    prefix = f"event: {event}\n" if event else ""
+    return f"{prefix}data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _events(request: AskRequest) -> Iterator[str]:
+    try:
+        for item in stream_answer(request.question, request.top_k, request.user_books):
+            if isinstance(item, dict):  # The final summary: sources, refused, latency_ms
+                yield _sse(item, event="sources")
+            else:
+                yield _sse({"token": item})
+        yield _sse({}, event="done")
+    except Exception as error:  # Tell the client instead of silently dropping the connection
+        message = " ".join(f"{type(error).__name__}: {error}".split())
+        yield f"event: error\ndata: {message}\n\n"
+
+
+@router.post("/ask/stream")
+def ask_stream(request: AskRequest):
+    return StreamingResponse(
+        _events(request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-    # Here's the RAG part -
-    # Augmenting the Generated response with the data we Retrieved
-    return chain.invoke({
-        "input": f"""
-            Respond to the user's query by suggesting books
-            
-            ONLY use info from the search results, 
-            but you can be creative about how to use them.
-            
-            Don't fall back to outside info, and you can say you don't know.
-            
-            The User's Query: {query}
-            
-            The Search Results: {results}
-            
-        """
-    })
-
-
