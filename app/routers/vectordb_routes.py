@@ -51,9 +51,3 @@ async def tools_rag(query:str):
     })
 
 
-retriever = vectorstore.as_retriever()
-keyword_retriever = BM25Retriever.from_documents(documents)
-keyword_retriever.k =  3
-keyword_retriever.get_relevant_documents("what bacteria grow on macconkey agar")
-
-ensemble_retriever = EnsembleRetriever(retrievers=[retriever, keyword_retriever], weights=[0.5, 0.5])

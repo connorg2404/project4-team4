@@ -4,6 +4,9 @@ from langchain_classic.memory import ConversationBufferWindowMemory, Conversatio
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
 from langchain_aws import ChatBedrockConverse
+from langchain.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
+
 
 
 llm = ChatBedrockConverse(
@@ -33,6 +36,14 @@ def get_general_chain():
         # Pass in the LLM
         # This will get returned to the router to get invoked
     return prompt | llm
+
+
+retriever = vectorstore.as_retriever()
+keyword_retriever = BM25Retriever.from_documents(documents)
+keyword_retriever.k =  3
+keyword_retriever.get_relevant_documents("what bacteria grow on macconkey agar")
+
+ensemble_retriever = EnsembleRetriever(retrievers=[retriever, keyword_retriever], weights=[0.5, 0.5])
 
 rag_prompt = ChatPromptTemplate.from_messages([
     ("system", """You are a helpful assistant that answers questions about books or book recommendations based on the following context.
