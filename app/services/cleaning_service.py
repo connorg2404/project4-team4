@@ -111,8 +111,8 @@ def clean_record(record: dict[str, Any]) -> dict[str, Any]:
         raise InvalidRecord("Each record must be a JSON object.")
 
     work_id = record.get("work_id")
-    if not isinstance(work_id, str) or not re.fullmatch(r"OL\d+W", work_id.strip()):
-        raise InvalidRecord("work_id must be an Open Library work ID.")
+    if not isinstance(work_id, str) or not re.fullmatch(r"OL\d+W|USER-[0-9a-f]{12}", work_id.strip()):
+        raise InvalidRecord("work_id must be an Open Library work ID or a USER-<12 hex digits> ID.")
     work_id = work_id.strip()
     title = " ".join(clean_text(record.get("title")).split())
     description = clean_text(record.get("description"))
@@ -134,9 +134,14 @@ def clean_record(record: dict[str, Any]) -> dict[str, Any]:
         raise InvalidRecord("first_publish_year must be a positive integer or null.")
 
     source_url = record.get("source_url")
-    expected_url = f"https://openlibrary.org/works/{work_id}"
-    if not isinstance(source_url, str) or source_url.strip().rstrip("/") != expected_url:
-        raise InvalidRecord("source_url must match the Open Library work ID.")
+    if work_id.startswith("USER-"):  # Added through the API, so there is no Open Library page
+        expected_url = None
+        if source_url is not None:
+            raise InvalidRecord("source_url must be null for user-added books.")
+    else:
+        expected_url = f"https://openlibrary.org/works/{work_id}"
+        if not isinstance(source_url, str) or source_url.strip().rstrip("/") != expected_url:
+            raise InvalidRecord("source_url must match the Open Library work ID.")
 
     cleaned = dict(record)
     cleaned.update(
